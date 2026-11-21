@@ -29,6 +29,7 @@ import {
 import type { ID, Initiative } from "@/domain/models";
 import type { CheckState } from "@/domain/readiness";
 import { ActionsSection } from "@/components/initiatives/action-list";
+import { InitiativeReadinessCard } from "@/components/initiatives/initiative-readiness";
 import { useWorkspace, type Workspace } from "@/lib/hooks/use-workspace";
 import { formatDate, formatRelative } from "@/lib/utils/dates";
 import {
@@ -379,6 +380,7 @@ function InitiativeDetail({
               </dd>
             </dl>
           </section>
+          <InitiativeReadinessCard workspace={workspace} initiative={initiative} />
           <CoverageCard initiative={initiative} coverage={coverage} />
         </aside>
       </div>

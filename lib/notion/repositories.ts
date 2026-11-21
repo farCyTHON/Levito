@@ -230,8 +230,8 @@ export async function createNotionRepositories(
   options: CreateNotionRepositoriesOptions,
 ): Promise<NotionRepositories> {
   const { env, client } = options;
-  const overrides = options.overrides ?? loadMappingOverrides();
-  const mappings = new Map<SpecEntity, Promise<EntityMapping>>();
+  const fixedOverrides = options.overrides;
+  const currentOverrides = () => fixedOverrides ?? loadMappingOverrides();
 
   const dataSourceIdFor = (entity: SpecEntity): string => {
     const id = env.dataSources[entity];
@@ -247,22 +247,17 @@ export async function createNotionRepositories(
   async function resolveMapping(entity: SpecEntity): Promise<EntityMapping> {
     const dataSourceId = env.dataSources[entity] ?? null;
     if (!dataSourceId) {
-      return resolveEntityMapping(entity, null, null, overrides, { dataSourceIds: env.dataSources });
+      return resolveEntityMapping(entity, null, null, currentOverrides(), { dataSourceIds: env.dataSources });
     }
     const discovered = await discoverDataSource(client, dataSourceId);
-    return resolveEntityMapping(entity, dataSourceId, discovered, overrides, {
+    return resolveEntityMapping(entity, dataSourceId, discovered, currentOverrides(), {
       dataSourceIds: env.dataSources,
     });
   }
 
-  function ensureMapping(entity: SpecEntity): Promise<EntityMapping> {
-    let pending = mappings.get(entity);
-    if (!pending) {
-      pending = resolveMapping(entity);
-      mappings.set(entity, pending);
-    }
-    return pending;
-  }
+  // No caching: overrides and remote schemas are re-read so Settings changes
+  // and repairs take effect without a server restart.
+  const ensureMapping = resolveMapping;
 
   function receipt(): WriteReceipt {
     return { target: "notion", confirmed: true, at: new Date().toISOString() };
@@ -411,7 +406,6 @@ export async function createNotionRepositories(
     organization,
     settings,
     async refreshMappings() {
-      mappings.clear();
       await Promise.all(SPEC_ENTITIES.map((e) => ensureMapping(e).catch(() => undefined)));
     },
     async mappingStatus() {

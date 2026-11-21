@@ -10,7 +10,10 @@ import { Pill } from "@/components/shared/pill";
 import { ReadinessPill, ReadinessRing, ReadinessSegments } from "@/components/shared/readiness";
 import { EmptyState, PageSkeleton } from "@/components/shared/states";
 import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
 import { summarizeReadiness } from "@/domain/readiness";
+import { evaluateInitiativeReadiness } from "@/domain/initiative-readiness";
+import { INITIATIVE_STATUS_LABELS } from "@/lib/utils/labels";
 import { useWorkspace, type Workspace } from "@/lib/hooks/use-workspace";
 import { formatDate, formatRelative } from "@/lib/utils/dates";
 import { readinessReports } from "@/lib/services/insights";
@@ -50,6 +53,43 @@ function HandoversContent({ workspace }: { workspace: Workspace }) {
           )
         }
       />
+
+      {data.initiatives.length > 0 && (
+        <section className="mb-6">
+          <h2 className="mb-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+            Initiative handover readiness
+          </h2>
+          <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {data.initiatives
+              .filter((i) => i.status !== "completed")
+              .map((initiative) => {
+                const r = evaluateInitiativeReadiness(initiative, data, {
+                  asOf: today,
+                  reviewWindowDays: data.settings.reviewWindowDays,
+                });
+                return (
+                  <li key={initiative.id}>
+                    <Link
+                      href={`/initiatives/${initiative.id}`}
+                      className="flex h-full flex-col gap-2 rounded-lg border bg-card p-3 transition-colors hover:border-foreground/20"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="truncate text-sm font-medium">{initiative.title}</p>
+                        <span className="tabular shrink-0 text-sm font-semibold">{r.score}</span>
+                      </div>
+                      <Progress value={r.score} aria-label={`${initiative.title} readiness`} />
+                      <p className="text-xs text-muted-foreground">
+                        {r.ready ? "Ready" : r.missingInfo.length ? `${r.missingInfo.length} gap${r.missingInfo.length === 1 ? "" : "s"}` : "Assessed"}
+                        {" · "}
+                        {INITIATIVE_STATUS_LABELS[initiative.status].label}
+                      </p>
+                    </Link>
+                  </li>
+                );
+              })}
+          </ul>
+        </section>
+      )}
 
       {data.handovers.length === 0 ? (
         <EmptyState

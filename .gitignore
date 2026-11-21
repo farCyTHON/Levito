@@ -43,3 +43,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local demo data + machine-local notion mapping overrides
+.data/
+notion.mapping.json

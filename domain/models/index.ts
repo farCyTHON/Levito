@@ -26,6 +26,7 @@ interface Entity {
 export interface Member extends Entity {
   name: string;
   role: string;
+  department: string;
   email: string;
   active: boolean;
 }

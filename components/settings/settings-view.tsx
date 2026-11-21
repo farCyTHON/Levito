@@ -64,7 +64,7 @@ function MemberFormDialog({
       onOpenChange={onOpenChange}
       title={member ? "Edit member" : "Add member"}
       description="Members can own initiatives and documents, be assigned actions, and be named in handovers."
-      initial={member ?? { name: "", role: "", email: "", active: true }}
+      initial={member ?? { name: "", role: "", department: "", email: "", active: true }}
       submitLabel={member ? "Save changes" : "Add member"}
       onSubmit={async (values) => {
         const result = member ? await service.members.update(member.id, values) : await service.members.create(values);
@@ -86,6 +86,16 @@ function MemberFormDialog({
                 value={values.role}
                 onChange={(e) => set("role", e.target.value)}
                 placeholder="Secretary"
+              />
+            )}
+          </Field>
+          <Field label="Department" error={errors.department} optional>
+            {(control) => (
+              <Input
+                {...control}
+                value={values.department ?? ""}
+                onChange={(e) => set("department", e.target.value)}
+                placeholder="e.g. Events, Finance"
               />
             )}
           </Field>

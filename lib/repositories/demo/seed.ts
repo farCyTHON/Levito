@@ -19,16 +19,16 @@ export function buildDemoSeed(today: ISODate): WorkspaceData {
   });
 
   const members: Member[] = [
-    { id: "m-amara", name: "Amara Okafor", role: "President", email: "amara.okafor@hues.example", active: true, ...meta(-300) },
-    { id: "m-daniel", name: "Daniel Reyes", role: "Vice President", email: "daniel.reyes@hues.example", active: true, ...meta(-300) },
-    { id: "m-priya", name: "Priya Raman", role: "Treasurer", email: "priya.raman@hues.example", active: true, ...meta(-300) },
-    { id: "m-tomas", name: "Tomás Lindqvist", role: "Events Lead", email: "tomas.lindqvist@hues.example", active: true, ...meta(-300) },
-    { id: "m-yuki", name: "Yuki Tanaka", role: "Sponsorship Lead", email: "yuki.tanaka@hues.example", active: true, ...meta(-300) },
-    { id: "m-leila", name: "Leila Haddad", role: "Marketing Lead", email: "leila.haddad@hues.example", active: true, ...meta(-300) },
-    { id: "m-kwame", name: "Kwame Mensah", role: "President-elect", email: "kwame.mensah@hues.example", active: true, ...meta(-20) },
-    { id: "m-ben", name: "Ben Ashworth", role: "Treasurer-elect", email: "ben.ashworth@hues.example", active: true, ...meta(-20) },
-    { id: "m-sofia", name: "Sofia Marchetti", role: "Events Lead-elect", email: "sofia.marchetti@hues.example", active: true, ...meta(-20) },
-    { id: "m-hannah", name: "Hannah Weiss", role: "Former Secretary", email: "", active: false, ...meta(-660, -300) },
+    { id: "m-amara", name: "Amara Okafor", role: "President", department: "Executive", email: "amara.okafor@hues.example", active: true, ...meta(-300) },
+    { id: "m-daniel", name: "Daniel Reyes", role: "Vice President", department: "Executive", email: "daniel.reyes@hues.example", active: true, ...meta(-300) },
+    { id: "m-priya", name: "Priya Raman", role: "Treasurer", department: "Finance", email: "priya.raman@hues.example", active: true, ...meta(-300) },
+    { id: "m-tomas", name: "Tomás Lindqvist", role: "Events Lead", department: "Events", email: "tomas.lindqvist@hues.example", active: true, ...meta(-300) },
+    { id: "m-yuki", name: "Yuki Tanaka", role: "Sponsorship Lead", department: "Partnerships", email: "yuki.tanaka@hues.example", active: true, ...meta(-300) },
+    { id: "m-leila", name: "Leila Haddad", role: "Marketing Lead", department: "Marketing", email: "leila.haddad@hues.example", active: true, ...meta(-300) },
+    { id: "m-kwame", name: "Kwame Mensah", role: "President-elect", department: "Executive", email: "kwame.mensah@hues.example", active: true, ...meta(-20) },
+    { id: "m-ben", name: "Ben Ashworth", role: "Treasurer-elect", department: "Finance", email: "ben.ashworth@hues.example", active: true, ...meta(-20) },
+    { id: "m-sofia", name: "Sofia Marchetti", role: "Events Lead-elect", department: "Events", email: "sofia.marchetti@hues.example", active: true, ...meta(-20) },
+    { id: "m-hannah", name: "Hannah Weiss", role: "Former Secretary", department: "Administration", email: "", active: false, ...meta(-660, -300) },
   ];
 
   const initiatives: Initiative[] = [

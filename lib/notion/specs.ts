@@ -72,6 +72,7 @@ export const ENTITY_SPECS: readonly EntitySpec[] = [
     fields: [
       f("name", "title", "Name", true),
       f("role", "rich_text", "Role"),
+      f("department", "rich_text", "Department"),
       f("email", "email", "Email"),
       f("active", "checkbox", "Active"),
     ],

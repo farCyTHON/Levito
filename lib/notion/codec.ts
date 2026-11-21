@@ -45,7 +45,7 @@ export function flattenInput(entity: SpecEntity, input: EntityInput): FlatRecord
   switch (entity) {
     case "members": {
       const i = input as MemberInput;
-      return { name: i.name, role: i.role, email: i.email, active: i.active };
+      return { name: i.name, role: i.role, department: i.department, email: i.email, active: i.active };
     }
     case "initiatives": {
       const i = input as InitiativeInput;
@@ -162,6 +162,7 @@ export function unflattenRecord(
         ...base,
         name: str(need("name")),
         role: str(flat.role ?? ""),
+        department: str(flat.department ?? ""),
         email: str(flat.email ?? ""),
         active: bool(flat.active),
       } as Member;

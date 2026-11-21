@@ -33,6 +33,7 @@ const email = z
 export const memberInputSchema = z.object({
   name: title("Name"),
   role: z.string().trim().min(2, "Add a committee role").max(80),
+  department: z.string().trim().max(80).default(""),
   email,
   active: z.boolean(),
 }) satisfies z.ZodType<MemberInput>;

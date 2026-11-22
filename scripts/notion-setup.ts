@@ -10,6 +10,7 @@
  */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { Client } from "@notionhq/client";
+import { runConfigCommand } from "./config-command.ts";
 import { ENTITY_SPECS, specFor, type SpecEntity } from "../lib/notion/specs.ts";
 
 for (const file of [".env.local", ".env"]) {
@@ -19,7 +20,6 @@ for (const file of [".env.local", ".env"]) {
 const API_KEY = process.env.NOTION_API_KEY ?? process.env.NOTION_TOKEN;
 const ROOT_PAGE_ID = process.env.NOTION_ROOT_PAGE_ID?.replace(/-/g, "");
 const VERSION = process.env.NOTION_VERSION || "2026-03-11";
-const CONFIG_PAGE_TITLE = "Levito Configuration";
 
 if (!API_KEY || !ROOT_PAGE_ID) {
   console.error("Missing NOTION_API_KEY or NOTION_ROOT_PAGE_ID in .env.local — see .env.example.");
@@ -157,43 +157,12 @@ async function ensureRelations(env: Record<SpecEntity, string>) {
   }
 }
 
-async function ensureConfigPage(existing: Map<string, string>) {
-  const found = existing.get(CONFIG_PAGE_TITLE);
-  if (found) {
-    results.push({ entity: "config", title: CONFIG_PAGE_TITLE, dataSourceId: found, action: "reused" });
-    return found;
-  }
-  const page = await client.pages.create({
-    parent: { page_id: ROOT },
-    properties: { title: { title: rt(CONFIG_PAGE_TITLE) } } as never,
-    children: [
-      {
-        object: "block",
-        type: "code",
-        code: {
-          rich_text: rt(JSON.stringify({ name: "", shortName: "", university: "", term: "", reviewWindowDays: 365 })),
-          language: "json",
-        },
-      },
-      {
-        object: "block",
-        type: "paragraph",
-        paragraph: { rich_text: rt("Levito configuration. Managed by npm run notion:setup — edit the JSON block or use Settings.") },
-      },
-    ] as never,
-  });
-  const id = (page as { id: string }).id.replace(/-/g, "");
-  results.push({ entity: "config", title: CONFIG_PAGE_TITLE, dataSourceId: id, action: "created" });
-  return id;
-}
-
-async function main() {
+async function provision(configPageId: string, pin: string) {
   console.log(`Levito Notion setup (API ${VERSION})`);
   console.log(`Root page: ${ROOT}\n`);
 
   const children = await listRootChildren();
   const dbTitles = new Map<string, string>();
-  const pageTitles = new Map<string, string>();
   for (const child of children) {
     if (child.type === "child_database") {
       try {
@@ -201,8 +170,6 @@ async function main() {
       } catch {
         console.warn(`  ! could not resolve data source for database "${child.title}"`);
       }
-    } else if (child.type === "child_page") {
-      pageTitles.set(child.title, child.id);
     }
   }
 
@@ -213,14 +180,13 @@ async function main() {
   console.log("Ensuring relation properties…");
   await ensureRelations(env);
 
-  const configPageId = await ensureConfigPage(pageTitles);
-
   // Write IDs back to .env.local (idempotent upsert).
   const envPath = ".env.local";
   const lines = existsSync(envPath) ? readFileSync(envPath, "utf8").split("\n") : [];
   const upserts: Record<string, string> = {
     NOTION_VERSION: VERSION,
     NOTION_CONFIG_PAGE_ID: configPageId,
+    NOTION_CONFIG_MANIFEST_BLOCK_ID: pin,
     ...Object.fromEntries(ENTITY_SPECS.map((s) => [s.envVar, env[s.entity]])),
   };
   const seen = new Set<string>();
@@ -245,7 +211,9 @@ async function main() {
   console.log("Next: restart the dev server (env is read at startup), then open Settings → Data source.");
 }
 
-main().catch((error) => {
+runConfigCommand(client, ROOT, process.env, process.argv.slice(2), provision).then(message => {
+  if (message) console.log(message);
+}).catch((error) => {
   console.error("\nSetup failed:", error instanceof Error ? error.message : error);
   process.exit(1);
 });

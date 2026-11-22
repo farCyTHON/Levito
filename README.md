@@ -72,9 +72,68 @@ screen is labelled; demo writes never claim Notion synchronization.
 `npm run notion:setup` is **idempotent**: it creates (or reuses by title) the
 Members, Initiatives, Knowledge Library, Decision Log, Handover Actions,
 Handovers databases plus all relation properties under `NOTION_ROOT_PAGE_ID`,
-creates the Levito Configuration page (org details + review policy stored as a
-JSON code block), and upserts the resulting IDs into `.env.local`. Re-running
-never duplicates resources.
+creates the Levito Configuration page with a verified initial revision and
+pinned manifest, and upserts the resulting IDs into `.env.local`. Subsequent
+runs validate the existing pin; a missing or invalid pin is not rediscovered.
+
+### Configuration migration (existing installations)
+
+Stop all writers (including older binaries and other administrators). Back up the
+server environment and record your current values. The setup command checks the
+actual Notion page parent **before provisioning**: the configuration page must
+be a readable, non-trashed direct child of the configured root. Missing or
+ambiguous configuration is an error, not permission to repair other schemas.
+
+- Unmarked legacy JSON: set `NOTION_CONFIG_PAGE_ID`, leave the pin unset, and
+  use `npm run notion:setup -- --init-config`. Migration alone paginates that
+  page looking for manifests marked by this integration. It reuses a unique
+  verified manifest, or creates one with blank organization and 365-day policy.
+  Select an explicit verified pin if there are multiple matches. Unmarked notes
+  are never adopted. Re-enter values in Settings if starting from defaults.
+- Phase 1 v1 manifest: keep the old explicit pin and use `npm run notion:setup
+  -- --upgrade-v1` (one line). This reads the selected valid legacy snapshot
+  and initializes a **separate** v2 manifest, or reuses an existing unique one.
+  It never upgrades a mutable v1 block in place. Check the selected values,
+  especially if any old save previously timed out.
+- Persist the printed `NOTION_CONFIG_MANIFEST_BLOCK_ID` and restart. Do not run
+  installers concurrently. Do not rotate tokens to a different bot and rely on
+  discovery: restore an explicitly backed-up pin instead. Uncertain setup
+  requests may leave orphan blocks; do not delete them during recovery.
+
+### Configuration commits and recovery
+
+The [block PATCH](https://developers.notion.com/reference/update-a-block)
+replaces fields; it has no documented revision/ETag precondition. Instead a
+v2 manifest is a pinned toggle containing ordered commit slots. Levito uses
+[insert at start](https://developers.notion.com/reference/patch-block-children)
+to reserve precedence. A save verifies its complete immutable candidate,
+reserves and verifies a **prepared** slot, then updates only that exact slot.
+An append whose ID is unknown can only create an inert candidate or prepared
+slot. Readers use the first committed slot in Notion child order (or genesis
+if none), never the last edited block. A late activation cannot move its slot
+ahead of a later confirmed reservation, even after a restart. A timed-out save
+may still become visible until superseded. Reload before retrying.
+
+Each commit records a verified active and previous candidate (page-scoped
+block ID, UUID, sequence number and SHA-256 of the full validated payload).
+Missing or malformed active data stops normal reads; Levito never silently
+serves old settings. With writers stopped and the v2 pin set:
+
+1. `npm run notion:setup -- --preview-recovery` validates only the exact
+   previous reference and displays its payload and both UUIDs locally.
+2. Review that payload before running `npm run notion:setup -- --restore-config
+   ACTIVE_UUID PREVIOUS_UUID` (one line). The command revalidates those exact
+   revisions and commits a verified copy. Reload and verify the settings.
+   Genesis has no predecessor; an invalid predecessor blocks restoration.
+
+Use one app writer process, direct administrator commands only during downtime,
+API version 2026-03-11 or compatible, and restrict edits to the managed toggle
+and candidate blocks. Slot order, not a clock or mutex surviving a restart,
+fences delayed operations. This is **not distributed CAS**: concurrent writers
+in different processes could merge stale payloads. Supporting them would need
+a transactional coordinator for authoritative heads and fencing (e.g. durable
+CAS storage), an architectural change not implemented here. Revisions and
+slots accumulate intentionally; no configuration operation deletes blocks.
 
 ### Existing workspaces & field mapping
 
@@ -98,6 +157,7 @@ browser bundle.
 | `NOTION_VERSION` | Notion API version (default `2026-03-11`). |
 | `NOTION_DS_MEMBERS` … `NOTION_DS_HANDOVERS` | Six data source IDs (written by `notion:setup`). |
 | `NOTION_CONFIG_PAGE_ID` | Levito Configuration page (org + review policy). |
+| `NOTION_CONFIG_MANIFEST_BLOCK_ID` | Exact manifest block ID; server-only, required in Notion mode. |
 | `LEVITO_DEMO_FILE` | Optional override for the demo data file path. |
 
 ## API

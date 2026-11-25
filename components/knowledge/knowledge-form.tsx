@@ -4,6 +4,7 @@ import { CheckList, DateField, Field, FormDialog, ListInput, MemberSelect, Optio
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { KNOWLEDGE_KINDS, type ContactDetails, type KnowledgeInput, type KnowledgeItem } from "@/domain/models";
+import { SUBSTANTIVE_CONTENT_MIN_CHARS as minimum } from "@/domain/readiness";
 import type { Workspace } from "@/lib/hooks/use-workspace";
 import { KNOWLEDGE_KIND_LABELS } from "@/lib/utils/labels";
 import { notifySaved } from "@/lib/utils/notify";
@@ -50,6 +51,7 @@ export function KnowledgeFormDialog({
     >
       {({ values, errors, set }) => {
         const contact = values.contact ?? EMPTY_CONTACT;
+        const length = values.content.trim().length;
         const setContact = (key: keyof ContactDetails, value: string) => set("contact", { ...contact, [key]: value });
         return (
           <>
@@ -109,7 +111,14 @@ export function KnowledgeFormDialog({
               hint={
                 values.kind === "contact"
                   ? undefined
-                  : "Handover readiness expects at least 200 characters of real documentation."
+                  : <>
+                    <span className="block tabular-nums">{length} / {minimum} characters (readiness minimum)</span>
+                    {length < minimum ? (
+                      <span className="text-amber-700 dark:text-amber-400">
+                        Add {minimum - length} more characters of documentation. Short linked documents reduce handover readiness.
+                      </span>
+                    ) : "Readiness length requirement met."} Leading and trailing whitespace do not count.
+                  </>
               }
             >
               {(control) => (

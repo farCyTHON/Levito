@@ -50,7 +50,7 @@ export function FormDialog<T>({
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[calc(100dvh-2rem)] gap-0 overflow-hidden p-0 sm:max-w-lg">
+      <DialogContent className="max-h-[calc(100dvh-2rem)] grid-cols-1 grid-rows-[minmax(0,1fr)] gap-0 p-0 sm:max-w-lg">
         <FormBody
           title={title}
           description={description}
@@ -120,12 +120,12 @@ function FormBody<T>({
   }
 
   return (
-    <form onSubmit={handleSubmit} noValidate className="flex max-h-[calc(100dvh-2rem)] flex-col">
-      <DialogHeader className="border-b px-5 py-4">
+    <form onSubmit={handleSubmit} noValidate className="flex min-h-0 min-w-0 flex-col">
+      <DialogHeader className="shrink-0 border-b px-5 py-4">
         <DialogTitle>{title}</DialogTitle>
         <DialogDescription>{description}</DialogDescription>
       </DialogHeader>
-      <div className="grid gap-4 overflow-y-auto px-5 py-4">
+      <div className="@container grid min-h-0 grid-cols-1 gap-4 overflow-y-auto px-5 py-4">
         {children(form)}
         {message && (
           <p role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
@@ -133,7 +133,7 @@ function FormBody<T>({
           </p>
         )}
       </div>
-      <DialogFooter className="m-0 rounded-none px-5 py-3">
+      <DialogFooter className="m-0 shrink-0 rounded-none px-5 py-3">
         <Button type="button" variant="ghost" onClick={onDone}>
           Cancel
         </Button>
@@ -156,7 +156,7 @@ export function Field({
 }: {
   label: string;
   error?: string;
-  hint?: string;
+  hint?: React.ReactNode;
   optional?: boolean;
   className?: string;
   children: (props: { id: string; "aria-invalid": boolean; "aria-describedby": string | undefined }) => React.ReactNode;
@@ -164,8 +164,8 @@ export function Field({
   const id = useId();
   const describedBy = error ? `${id}-error` : hint ? `${id}-hint` : undefined;
   return (
-    <div className={cn("grid gap-1.5", className)}>
-      <Label htmlFor={id} className="text-xs font-medium text-muted-foreground">
+    <div className={cn("grid min-w-0 grid-cols-1 content-start gap-1.5 wrap-anywhere", className)}>
+      <Label htmlFor={id} className="flex-wrap text-xs font-medium text-muted-foreground">
         {label}
         {optional && <span className="font-normal text-muted-foreground/70">Optional</span>}
       </Label>
@@ -185,7 +185,7 @@ export function Field({
   );
 }
 
-type ControlProps = { id?: string; "aria-invalid"?: boolean; "aria-describedby"?: string };
+type ControlProps = { id?: string; "aria-invalid"?: boolean; "aria-describedby"?: string; "aria-required"?: boolean };
 
 export function OptionSelect<T extends string>({
   value,
@@ -205,10 +205,10 @@ export function OptionSelect<T extends string>({
 } & ControlProps) {
   return (
     <Select value={value} onValueChange={(next) => onChange(next as T)}>
-      <SelectTrigger size={size} aria-label={ariaLabel} className={cn("w-full", className)} {...control}>
+      <SelectTrigger size={size} aria-label={ariaLabel} className={cn("w-full min-w-0 max-w-full *:data-[slot=select-value]:block *:data-[slot=select-value]:min-w-0 *:data-[slot=select-value]:truncate", className)} {...control}>
         <SelectValue />
       </SelectTrigger>
-      <SelectContent position="popper" align="start">
+      <SelectContent position="popper" align="start" className="max-w-(--radix-select-content-available-width) wrap-anywhere">
         {options.map((option) => (
           <SelectItem key={option.value} value={option.value}>
             {option.label}
@@ -326,7 +326,7 @@ export function CheckList({
 }) {
   const groupId = useId();
   return (
-    <fieldset className="grid gap-1.5">
+    <fieldset className="grid min-w-0 grid-cols-1 gap-1.5">
       <legend className="mb-1.5 flex w-full items-center justify-between text-xs font-medium text-muted-foreground">
         {label}
         <span className="tabular font-normal">{value.length} selected</span>

@@ -69,7 +69,7 @@ export function HandoverFormDialog({
               />
             )}
           </Field>
-          <div className="grid gap-4 sm:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 @min-[23rem]:grid-cols-2 @min-[28rem]:grid-cols-3">
             <Field label="Outgoing term" error={errors.outgoingTerm}>
               {(control) => (
                 <Input {...control} value={values.outgoingTerm} onChange={(e) => set("outgoingTerm", e.target.value)} />
@@ -84,26 +84,31 @@ export function HandoverFormDialog({
               {(control) => <DateField {...control} value={values.targetDate} onChange={(v) => set("targetDate", v)} />}
             </Field>
           </div>
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-4 @min-[23rem]:grid-cols-2">
             <Field label="Outgoing owner" error={errors.outgoingOwnerId}>
               {(control) => (
                 <MemberSelect
                   {...control}
                   members={data.members}
                   value={values.outgoingOwnerId}
-                  onChange={(v) => set("outgoingOwnerId", v)}
+                  onChange={(v) => {
+                    set("outgoingOwnerId", v);
+                    if (v && v === values.successorId) set("successorId", null);
+                  }}
                   emptyLabel="Not recorded"
                 />
               )}
             </Field>
-            <Field label="Successor" error={errors.successorId}>
+            <Field label={handover ? "Successor" : "Successor (required)"} error={errors.successorId}
+              hint="Choose a different member from the outgoing owner.">
               {(control) => (
                 <MemberSelect
                   {...control}
-                  members={data.members}
+                  aria-required={!handover}
+                  members={data.members.filter((member) => member.id !== values.outgoingOwnerId)}
                   value={values.successorId}
                   onChange={(v) => set("successorId", v)}
-                  emptyLabel="Not yet named"
+                  emptyLabel={handover ? "Not yet named" : "Choose a successor"}
                 />
               )}
             </Field>
@@ -119,6 +124,9 @@ export function HandoverFormDialog({
               hint: INITIATIVE_STATUS_LABELS[i.status].label,
             }))}
           />
+          {values.initiativeIds.length === 0 && (
+            <p className="text-xs text-muted-foreground">Select the initiative this handover covers so its readiness can use the successor.</p>
+          )}
           <CheckList
             label="Required documents"
             value={values.knowledgeIds}

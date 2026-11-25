@@ -9,10 +9,14 @@ const payloadSchema = z.strictObject({
 });
 type Payload = z.infer<typeof payloadSchema>;
 const header = { owner: z.literal("levito/config"), version: z.literal(2) };
-const revision = { revision: z.uuid(), number: z.number().int().positive() };
+const revisionId = z.uuid().toLowerCase();
+const revision = { revision: revisionId, number: z.number().int().positive() };
 const ref = z.strictObject({ ...revision, candidateId: z.uuid(), digest: z.string().regex(/^[a-f0-9]{64}$/) });
 const pointers = { active: ref, previous: ref.nullable() };
-const manifest = z.strictObject({ ...header, kind: z.literal("manifest"), ...pointers });
+const provenanceSchema = z.strictObject({ manifestId: z.uuid().toLowerCase(), revision: revisionId, digest: ref.shape.digest });
+export type Provenance = z.infer<typeof provenanceSchema>;
+const manifest = z.strictObject({ ...header, kind: z.literal("manifest"), ...pointers,
+  initializationId: z.uuid().optional(), provenance: provenanceSchema.optional() });
 const slot = z.strictObject({ ...header, kind: z.literal("slot"), state: z.enum(["prepared", "committed"]), ...pointers });
 const candidate = z.strictObject({ ...header, kind: z.literal("candidate"), ...revision, payload: payloadSchema });
 const mark = { owner: "levito/config", version: 2 } as const;
@@ -50,9 +54,8 @@ async function exact(client: Client, id: string) {
   if (norm(b.id) !== norm(id)) throw new Error("Configuration read returned a different block.");
   return b;
 }
-async function append(client: Client, parent: string, body: object, toggle = false, first = false) {
+async function append(client: Client, parent: string, body: object, toggle = false) {
   const { results } = await client.blocks.children.append({ block_id: parent,
-    ...(first ? { position: { type: "start" as const } } : {}),
     children: [toggle ? { type: "toggle", toggle: { rich_text: rich(body) } } : { type: "code", code: code(body) }],
   });
   if (results.length !== 1 || !z.uuid().safeParse(results[0].id).success) throw new Error("Unconfirmed appended block ID.");
@@ -70,25 +73,29 @@ async function load(client: Client, page: string, pointer: Ref) {
   if (data.revision !== pointer.revision || data.number !== pointer.number || digest(data.payload) !== pointer.digest) throw new Error("Candidate revision or payload digest mismatch.");
   return data.payload;
 }
-export async function initializeConfig(client: Client, page: string, root: string,
-  payload: Payload = { name: "", shortName: "", university: "", term: "", reviewWindowDays: 365 }) {
+export async function initializeConfig(client: Client, page: string, root: string, initializationId: string,
+  payload: Payload = { name: "", shortName: "", university: "", term: "", reviewWindowDays: 365 }, provenance?: Provenance) {
   await verifyConfigPage(client, page, root);
   const active = await stage(client, page, payload, 1);
-  const body = { ...mark, kind: "manifest", active, previous: null } as const;
+  const body = { ...mark, kind: "manifest", active, previous: null, initializationId, ...(provenance && {provenance}) } as const;
   const pin = await append(client, page, body, true);
   if (!isDeepStrictEqual(parse(await exact(client, pin), page, false, manifest, true), body)) throw new Error("Initial manifest verification failed.");
   return pin;
 }
 
-async function* children(client: Client, parent: string) {
+export async function* listedChildren(client: Client, parent: string) {
   let cursor: string | undefined;
   const seen = new Set<string>();
   for (;;) {
     const res = await client.blocks.children.list({ block_id: parent, start_cursor: cursor, page_size: 100 });
+    if (!res || typeof res.has_more !== "boolean" || !Array.isArray(res.results) ||
+        (res.has_more ? !res.results.length || typeof res.next_cursor !== "string" ||
+          !res.next_cursor.trim() || seen.has(res.next_cursor) : res.next_cursor !== null)) {
+      throw new Error("Incomplete Notion child listing.");
+    }
     yield* res.results;
     if (!res.has_more) return;
-    if (!res.next_cursor || seen.has(res.next_cursor)) throw new Error("Incomplete configuration listing.");
-    seen.add(cursor = res.next_cursor);
+    seen.add(cursor = res.next_cursor!);
   }
 }
 
@@ -96,7 +103,7 @@ async function* children(client: Client, parent: string) {
 export async function discoverManifest(client: Client, page: string, exclude?: string) {
   const bot = await client.users.me({});
   const ids: string[] = [];
-  for await (const b of children(client, page)) {
+  for await (const b of listedChildren(client, page)) {
     if (!("created_by" in b)) throw new Error("Partial configuration-page listing. Cannot safely discover a manifest.");
     if (exclude && norm(b.id) === norm(exclude)) continue;
     const body = jsonBody(b);
@@ -111,29 +118,65 @@ export async function discoverManifest(client: Client, page: string, exclude?: s
 // Explicit v1 pin only. Copy its selected values to an independent v2 namespace:
 // an outstanding v1 PATCH can never address a v2 slot.
 export async function readLegacyPin(client: Client, page: string, pin: string) {
-  const v1 = { owner: z.literal("levito/config"), version: z.literal(1), revision: z.uuid() };
-  const pointer = parse(await exact(client,pin), page, false,
+  const v1 = { owner: z.literal("levito/config"), version: z.literal(1), revision: revisionId };
+  const source = await exact(client,pin);
+  const pointer = parse(source, page, false,
     z.strictObject({...v1,kind:z.literal("manifest"),candidateId:z.uuid()}));
   const entry = parse(await exact(client,pointer.candidateId), page, false,
     z.strictObject({...v1,kind:z.literal("candidate"),payload:payloadSchema}));
   if (entry.revision !== pointer.revision) throw new Error("Legacy configuration revision mismatch.");
-  return entry.payload;
+  return { payload: entry.payload, provenance: {manifestId: source.id.toLowerCase(), revision: pointer.revision, digest: digest(entry.payload)} };
+}
+
+export async function manifestMetadata(client: Client, page: string, pin: string) {
+  const initial = parse(await exact(client, pin), page, false, manifest, true);
+  if (initial.active.number !== 1 || initial.previous !== null) throw new Error("Invalid genesis metadata.");
+  return initial;
+}
+
+// The intent preserves the selected V1 snapshot's digest even if V1 changes after timeout.
+export async function verifyGenesis(client: Client, page: string, pin: string, source: Provenance | null) {
+  const initial = await manifestMetadata(client, page, pin);
+  const expected = source && provenanceSchema.parse(source);
+  if (!isDeepStrictEqual(initial.provenance ?? null, expected) ||
+      (expected && initial.active.digest !== expected.digest)) {
+    throw new Error("Manifest migration provenance mismatch or absent. Select a trusted V2 pin explicitly.");
+  }
+  await load(client, page, initial.active);
+  return initial;
 }
 
 const runtime = globalThis as typeof globalThis & { levitoConfigWrites?: Map<string, Promise<void>> };
 const writes = (runtime.levitoConfigWrites ??= new Map());
 export function configStore(client: Client, page: string, pin: string, root: string) {
-  // Each slot reserves its precedence BEFORE any activation request. Activation updates only
-  // that exact slot, never its position. An unacknowledged reservation is never activated.
   async function head() {
-    const initial = parse(await exact(client, pin), page, false, manifest, true);
-    let highest = initial.active.number;
-    for await (const b of children(client, pin)) {
+    const initial = await manifestMetadata(client, page, pin);
+    let winner: {active: Ref; previous: Ref | null} = initial;
+    let highest = 1;
+    const numbers = new Set([1]);
+    const revisions = new Set([initial.active.revision]);
+    const ids = new Set<string>();
+    const committed = new Map([[1, initial.active]]);
+    const predecessors: Ref[] = [];
+    for await (const b of listedChildren(client, pin)) {
       const record = parse(b, pin, true, slot);
-      highest = Math.max(highest, record.active.number);
-      if (record.state === "committed") return { active: record.active, previous: record.previous, highest };
+      const { number, revision } = record.active;
+      if (!z.uuid().safeParse(b.id).success || ids.has(norm(b.id)) || numbers.has(number) || revisions.has(revision) ||
+          !record.previous || record.previous.number >= number) throw new Error("Conflicting or invalid configuration ordering metadata.");
+      ids.add(norm(b.id));
+      numbers.add(number);
+      revisions.add(revision);
+      predecessors.push(record.previous);
+      highest = Math.max(highest, number);
+      if (record.state === "committed") {
+        committed.set(number, record.active);
+        if (number > winner.active.number) winner = record;
+      }
     }
-    return { active: initial.active, previous: initial.previous, highest };
+    if (highest !== numbers.size || predecessors.some(p => !isDeepStrictEqual(p, committed.get(p.number)))) {
+      throw new Error("Configuration history changed or is incomplete.");
+    }
+    return { active: winner.active, previous: winner.previous, highest, revisions };
   }
   type Head = Awaited<ReturnType<typeof head>>;
   async function save(prepare: (base: Head) => Promise<{ payload: Payload; previous: Ref }>) {
@@ -142,13 +185,18 @@ export function configStore(client: Client, page: string, pin: string, root: str
       await verifyConfigPage(client, page, root);
       const base = await head();
       const change = await prepare(base);
+      if (!Number.isSafeInteger(base.highest + 1)) throw new Error("Configuration sequence exhausted.");
       const active = await stage(client, page, change.payload, base.highest + 1);
+      const beforeReservation = await head();
+      if (beforeReservation.highest !== base.highest || !isDeepStrictEqual(beforeReservation.active, base.active)) {
+        throw new Error("Configuration changed before reservation. Reload before retrying.");
+      }
       const pending = { ...mark, kind: "slot", state: "prepared", active, previous: change.previous } as const;
-      const id = await append(client, pin, pending, false, true);
+      const id = await append(client, pin, pending);
       if (!isDeepStrictEqual(parse(await exact(client, id), pin, true, slot), pending)) throw new Error("Reservation verification failed.");
-      const first = await client.blocks.children.list({ block_id: pin, page_size: 1 });
-      if (first.results[0]?.id !== id) throw new Error("Notion did not reserve the leading position. Refusing activation.");
-      if (!isDeepStrictEqual((await head()).active, base.active)) throw new Error("Configuration changed; reload before retrying.");
+      const reserved = await head();
+      if (!reserved.revisions.has(active.revision) || reserved.highest !== active.number ||
+          !isDeepStrictEqual(reserved.active, base.active)) throw new Error("Configuration changed; reload before retrying.");
       const committed = { ...pending, state: "committed" };
       let failure: unknown;
       try { await client.blocks.update({ block_id: id, code: code(committed) }); } catch (error) { failure = error; }
@@ -175,7 +223,7 @@ export function configStore(client: Client, page: string, pin: string, root: str
     restore(activeRevision: string, previousRevision: string) {
       return save(async base => {
         const reviewed = await recovery(base);
-        if (reviewed.active.revision !== activeRevision || reviewed.previous.revision !== previousRevision) throw new Error("Recovery selection changed; preview again.");
+        if (reviewed.active.revision !== revisionId.parse(activeRevision) || reviewed.previous.revision !== revisionId.parse(previousRevision)) throw new Error("Recovery selection changed; preview again.");
         return { payload: reviewed.payload, previous: reviewed.previous };
       });
     },

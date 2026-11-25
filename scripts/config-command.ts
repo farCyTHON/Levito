@@ -1,45 +1,56 @@
 import type { Client } from "@notionhq/client";
-import { configStore, discoverManifest, initializeConfig, readLegacyPin, verifyConfigPage } from "../lib/notion/config-store.ts";
+import { configStore, discoverManifest, initializeConfig, listedChildren, readLegacyPin, verifyConfigPage, verifyGenesis } from "../lib/notion/config-store.ts";
+import { initJournal } from "./init-journal.ts";
+
+export async function listRootDatabases(client: Client, root: string) {
+  const databases: {id: string; title: string}[] = [];
+  for await (const b of listedChildren(client, root)) {
+    if (!("type" in b)) throw new Error("Cannot inspect partial root child.");
+    if (b.type === "child_database") databases.push({id: b.id, title: b.child_database.title});
+  }
+  return databases;
+}
 
 // The CLI calls this dispatcher before handing control to database provisioning.
 export async function runConfigCommand(client: Client, root: string, env: Record<string, string | undefined>, args: string[],
   provision: (page: string, pin: string) => Promise<void>) {
   const [command, active, previous] = args;
   if (!(args.length === 0 || (args.length === 1 && ["--init-config", "--upgrade-v1", "--preview-recovery"].includes(command)) ||
+      (command === "--resolve-init" && args.length === 2) ||
       (command === "--restore-config" && args.length === 3))) throw new Error("Invalid configuration command.");
-  let page = env.NOTION_CONFIG_PAGE_ID;
+  const page = env.NOTION_CONFIG_PAGE_ID;
   let pin = env.NOTION_CONFIG_MANIFEST_BLOCK_ID;
-  if (command && !page) throw new Error("Set an explicit NOTION_CONFIG_PAGE_ID.");
-  if (!page) {
-    if (pin) throw new Error("Pinned manifest without a configuration page.");
-    // Fresh installations may create a page only after ruling out an existing one.
-    const names: string[] = [];
-    let cursor: string | undefined;
-    const seen = new Set<string>();
-    do {
-      const result = await client.blocks.children.list({ block_id: root, start_cursor: cursor });
-      for (const block of result.results) {
-        if (!("type" in block)) throw new Error("Cannot inspect partial root child.");
-        if (block.type === "child_page" && block.child_page.title === "Levito Configuration") names.push(block.id);
-      }
-      cursor = result.has_more ? result.next_cursor ?? undefined : undefined;
-      if (result.has_more && (!cursor || seen.has(cursor))) throw new Error("Incomplete root listing.");
-      if (cursor) seen.add(cursor);
-    } while (cursor);
-    if (names.length) throw new Error("Existing configuration page: set its explicit ID and migrate before provisioning.");
-    const created = await client.pages.create({ parent: { page_id: root },
-      properties: { title: { title: [{ text: { content: "Levito Configuration" } }] } } });
-    page = created.id;
-    pin = await initializeConfig(client, page, root);
-  }
+  if (!page) throw new Error("Manually create or select a configuration page and set NOTION_CONFIG_PAGE_ID.");
   await verifyConfigPage(client, page, root);
-  if (command === "--upgrade-v1") {
-    if (!pin) throw new Error("Select the exact old manifest pin to upgrade.");
-    const payload = await readLegacyPin(client, page, pin);
-    pin = await discoverManifest(client, page, pin) ?? await initializeConfig(client, page, root, payload);
+  const journal = initJournal(env.LEVITO_INIT_STATE_DIR, page);
+  const state = journal.state();
+  if (command === "--resolve-init") {
+    if (!state || state.pin) throw new Error("No indeterminate initialization on this page.");
+    const record = await verifyGenesis(client, page, active, state.provenance);
+    if (record.initializationId !== state.attempt) {
+      throw new Error("Selected manifest does not match the quarantined attempt.");
+    }
+    await configStore(client, page, active, root).get();
+    const canonicalPin = active.replaceAll("-", "").toLowerCase().replace(
+      /^(.{8})(.{4})(.{4})(.{4})(.{12})$/, "$1-$2-$3-$4-$5");
+    journal.confirm(state.attempt, canonicalPin);
+    return `NOTION_CONFIG_MANIFEST_BLOCK_ID=${canonicalPin}`;
   }
-  if (command === "--init-config" && !pin) {
-    pin = await discoverManifest(client, page) ?? await initializeConfig(client, page, root);
+  if (state && !state.pin) throw new Error("Initialization indeterminate: do not retry. Resolve the exact manifest with --resolve-init or use a fresh page.");
+  if (command === "--upgrade-v1" || (command === "--init-config" && !pin)) {
+    if (command === "--upgrade-v1" && !pin) throw new Error("Select the exact old manifest pin to upgrade.");
+    const legacy = command === "--upgrade-v1" ? await readLegacyPin(client, page, pin!) : undefined;
+    const found = await discoverManifest(client, page, legacy ? pin : undefined);
+    if (state?.pin && state.pin !== found) throw new Error("Discovery differs from the durable initialization receipt. Select a verified manifest explicitly.");
+    if (found) {
+      if (legacy) await verifyGenesis(client, page, found, legacy.provenance);
+      pin = found;
+    } else {
+      const attempt = journal.begin(legacy?.provenance);
+      pin = await initializeConfig(client, page, root, attempt, legacy?.payload, legacy?.provenance);
+      await verifyGenesis(client, page, pin, legacy?.provenance ?? null);
+      journal.confirm(attempt, pin);
+    }
   }
   if (!pin) throw new Error("Existing page without manifest pin: migrate before provisioning.");
   const store = configStore(client, page, pin, root);

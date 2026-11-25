@@ -345,7 +345,15 @@ export function pageMeta(page: RawPage): PageMeta {
 export function encodeProperties(entity: SpecEntity, flat: FlatRecord, fields: ResolvedField[]): Record<string, unknown> {
   const properties: Record<string, unknown> = {};
   for (const field of fields) {
-    if (!field.propertyId || field.status !== "ok" || !field.writable) continue;
+    if (!field.propertyId || field.status !== "ok" || !field.writable) {
+      const value = flat[field.field];
+      const readinessField = (entity === "knowledge" && ["content", "initiativeIds"].includes(field.field)) ||
+        (entity === "handovers" && ["outgoingOwnerId", "successorId", "initiativeIds"].includes(field.field));
+      if (readinessField && (Array.isArray(value) ? value.length > 0 : Boolean(value))) {
+        throw new NotionError("validation_error", `Cannot save ${field.field}: check its Notion property mapping in Settings.`);
+      }
+      continue;
+    }
     const key = field.propertyId;
     const value = flat[field.field];
     switch (field.kind) {

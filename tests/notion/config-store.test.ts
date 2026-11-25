@@ -1,10 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Client } from "@notionhq/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configStore, initializeConfig } from "@/lib/notion/config-store";
 import { readNotionEnv } from "@/lib/notion/env";
 import { createNotionRepositories } from "@/lib/notion/repositories";
-import { runConfigCommand } from "../../scripts/config-command";
+import { listRootDatabases, runConfigCommand } from "../../scripts/config-command";
+import { initJournal } from "../../scripts/init-journal";
 
 const root = randomUUID();
 const page = randomUUID(), pin = randomUUID(), old = randomUUID(), note = randomUUID();
@@ -40,10 +44,9 @@ function fixture() {
       return rows.get(block_id);
     }),
     children: {
-      list: vi.fn(async ({block_id}: {block_id:string}) => ({results: structuredClone([...rows.values()].filter(b => b.parent.block_id === block_id).reverse()), has_more:false})),
-      append: vi.fn(async ({ block_id, children, position }: { block_id: string; children: {code?: CodeWrite; toggle?:CodeWrite}[]; position?:{type:string} }) => {
+      list: vi.fn(async ({block_id}: {block_id:string; start_cursor?:string}) => ({results: structuredClone([...rows.values()].filter(b => b.parent.block_id === block_id).reverse()), has_more:false, next_cursor:null as string | null})),
+      append: vi.fn(async ({ block_id, children }: { block_id: string; children: {code?: CodeWrite; toggle?:CodeWrite}[] }) => {
         const parent = block_id.replaceAll("-", "") === page.replaceAll("-", "") ? page : block_id;
-        if (parent !== page) expect(position?.type).toBe("start");
         const results = children.map(({ code, toggle }) => {
           const b = block(randomUUID(), unpack((code ?? toggle)!), parent, !!toggle);
           rows.set(b.id, b);
@@ -229,16 +232,99 @@ describe("Notion configuration commits", () => {
   });
 
   it("explicit initialization returns a verified new pin without adopting legacy data", async () => {
-    const id = await initializeConfig(f.client, page, root);
+    const id = await initializeConfig(f.client, page, root, randomUUID());
     const fresh = await f.repos(id);
     expect(await fresh.settings.get()).toEqual({ reviewWindowDays: 365 });
     expect((await fresh.organization.get()).name).toBe("");
     expect(f.rows.get(pin)).toEqual(block(pin, initial, page, true));
   });
+
+  it("reads logical sequence across reordered pages and allocates past every reservation", async () => {
+    const store = configStore(f.client,page,pin,root);
+    await store.update({reviewWindowDays:120});
+    await store.update({reviewWindowDays:180});
+    expect((await store.get()).reviewWindowDays).toBe(180);
+    const list = f.blocks.children.list.getMockImplementation()!;
+    f.blocks.children.list.mockImplementation(async args => {
+      const all = (await list(args)).results.reverse(); // Only physical order changes.
+      const index = Number(args.start_cursor ?? 0);
+      const more = index + 1 < all.length;
+      return {results:all.slice(index,index+1), has_more:more, next_cursor:more ? String(index+1) : null};
+    });
+    const fresh = await f.repos();
+    expect(await fresh.settings.get()).toEqual({reviewWindowDays:180});
+    await fresh.settings.update({reviewWindowDays:210});
+    expect((await store.previewRecovery()).active.number).toBe(4);
+    f.blocks.update.mockRejectedValueOnce(new Error("unconfirmed"));
+    await expect(fresh.settings.update({reviewWindowDays:240})).rejects.toThrow("unconfirmed");
+    await fresh.settings.update({reviewWindowDays:270});
+    expect((await store.previewRecovery()).active.number).toBe(6); // Prepared 5 still occupies its sequence.
+  });
+
+  it.each(["conflict","incomplete","invalid state","invalid sequence"])("fails closed on %s after a valid committed slot", async fault => {
+    const store = configStore(f.client,page,pin,root);
+    await store.update({reviewWindowDays:120});
+    const list = f.blocks.children.list.getMockImplementation()!;
+    f.blocks.children.list.mockImplementation(async args => {
+      const res = await list(args);
+      if (fault === "incomplete") return {...res, has_more:true, next_cursor:null};
+      const body = JSON.parse(res.results[0].code.rich_text[0].plain_text);
+      body.active.revision = randomUUID();
+      if (fault === "invalid state") body.state = "unknown";
+      if (fault === "invalid sequence") body.active.number = 1.5;
+      return {...res, results:[...res.results,block(randomUUID(),body,pin)]};
+    });
+    await expect(store.get()).rejects.toThrow();
+    await expect(store.update({reviewWindowDays:180})).rejects.toThrow();
+    expect(f.blocks.update).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a duplicate revision UUID with different casing at a different sequence", async () => {
+    const store = configStore(f.client,page,pin,root);
+    await store.update({reviewWindowDays:120});
+    const committed = [...f.rows.values()].find(b => b.parent.block_id === pin)!;
+    const prepared = JSON.parse(committed.code.rich_text[0].plain_text);
+    prepared.state = "prepared";
+    prepared.active.number++;
+    prepared.active.revision = prepared.active.revision.toUpperCase();
+    const id = randomUUID();
+    f.rows.set(id,block(id,prepared,pin));
+    await expect(store.get()).rejects.toThrow(/Conflicting/);
+  });
+
+  it.each([
+    ["missing has_more", {next_cursor:null}],
+    ["missing next_cursor", {has_more:false}],
+    ["terminal cursor", {has_more:false,next_cursor:"another"}],
+    ["empty cursor", {has_more:true,next_cursor:" "}],
+    ["continuing without results", {has_more:true,next_cursor:"next",results:[]}],
+    ["repeated cursor", {has_more:true,next_cursor:"same"}],
+    ["invalid results", {has_more:false,next_cursor:null,results:null}],
+  ] as const)("rejects %s in history and root discovery", async (_, envelope) => {
+    const store = configStore(f.client,page,pin,root);
+    await store.update({reviewWindowDays:120});
+    const listed = [...f.rows.values()].filter(b => b.parent.block_id === pin);
+    f.blocks.children.list.mockResolvedValue({results:listed,...envelope} as never);
+    await expect(store.get()).rejects.toThrow(/Incomplete Notion child listing/);
+    await expect(listRootDatabases(f.client,root)).rejects.toThrow(/Incomplete Notion child listing/);
+  });
 });
 
 describe("setup CLI dispatch (injected mock client, no process or env file)", () => {
-  const env = {NOTION_CONFIG_PAGE_ID:page};
+  const env = {NOTION_CONFIG_PAGE_ID:page, LEVITO_INIT_STATE_DIR:""};
+  beforeEach(() => { env.LEVITO_INIT_STATE_DIR = mkdtempSync(join(tmpdir(),"levito-journal-")); });
+  afterEach(() => { rmSync(env.LEVITO_INIT_STATE_DIR,{recursive:true}); });
+  it.each([[],["--init-config"],["--upgrade-v1"]])("requires a manual page before any setup work (%s)", async (...flags) => {
+    const f = fixture(), createPage = vi.fn(), createDatabase = vi.fn();
+    Object.assign(f.client.pages,{create:createPage});
+    Object.assign(f.client,{databases:{create:createDatabase}});
+    const provision = vi.fn(async () => { await createDatabase(); });
+    await expect(runConfigCommand(f.client,root,{...env,NOTION_CONFIG_PAGE_ID:undefined},flags,provision))
+      .rejects.toThrow(/NOTION_CONFIG_PAGE_ID/);
+    for (const call of [createPage,createDatabase,f.blocks.children.append,f.blocks.children.list,provision]) {
+      expect(call).not.toHaveBeenCalled();
+    }
+  });
   it.each(["wrong parent","missing access","absent page","no explicit page","legacy without pin","unknown flag"])(
     "rejects %s before provisioning or configuration writes", async reason => {
       const f = fixture(), provision = vi.fn();
@@ -282,11 +368,88 @@ describe("setup CLI dispatch (injected mock client, no process or env file)", ()
     const result = await run();
     expect(await run()).toBe(result);
     const migrated = await f.repos(result!.split("=")[1]);
+    const body = JSON.parse(f.rows.get(result!.split("=")[1])!.toggle.rich_text[0].plain_text);
+    expect(body.provenance).toEqual({manifestId:pin,revision:v1.revision,digest:initial.active.digest});
     expect(await migrated.settings.get()).toEqual({reviewWindowDays:90});
     expect(await migrated.organization.get()).toEqual(org);
     expect(f.rows.get(pin)).toEqual(manifest);
     expect(f.blocks.children.append).toHaveBeenCalledTimes(2);
     expect(f.blocks.update).not.toHaveBeenCalled();
+    expect(f.blocks.delete).not.toHaveBeenCalled();
+  });
+  it.each(["manifestId","revision","digest","absent"])("refuses reuse with %s provenance mismatch", async fault => {
+    const f = fixture(), target = randomUUID(), provision = vi.fn();
+    const source = { owner:header.owner,version:1,revision:header.revision };
+    f.rows.set(pin,block(pin,{...source,kind:"manifest",candidateId:old}));
+    f.rows.set(old,block(old,{...source,kind:"candidate",payload:oldPayload}));
+    const provenance = {manifestId:pin,revision:source.revision,digest:initial.active.digest,
+      [fault]:fault==="digest" ? "a".repeat(64) : randomUUID()};
+    f.rows.set(target,block(target,{...initial,...(fault==="absent" ? {} : {provenance})},page,true));
+    await expect(runConfigCommand(f.client,root,{...env,NOTION_CONFIG_MANIFEST_BLOCK_ID:pin},["--upgrade-v1"],provision)).rejects.toThrow(/provenance/);
+    expect(provision).not.toHaveBeenCalled();
+    expect(f.blocks.children.append).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["--upgrade-v1",false],["--upgrade-v1",true],
+    ["--resolve-init",false],["--resolve-init",true],
+  ] as const)("%s checks the original genesis payload (later commit: %s)", async (command,later) => {
+    const f = fixture(), provision = vi.fn(), source = randomUUID(), sourceCandidate = randomUUID();
+    const v1 = {owner:header.owner,version:1,revision:header.revision};
+    f.rows.set(source,block(source,{...v1,kind:"manifest",candidateId:sourceCandidate}));
+    f.rows.set(sourceCandidate,block(sourceCandidate,{...v1,kind:"candidate",payload:oldPayload}));
+    const provenance = {manifestId:source,revision:header.revision,digest:initial.active.digest};
+    const journal = initJournal(env.LEVITO_INIT_STATE_DIR,page);
+    const initializationId = command === "--resolve-init" ? journal.begin(provenance) : randomUUID();
+    const genesis = {...initial,active:{...initial.active},initializationId,provenance};
+    f.rows.set(pin,block(pin,genesis,page,true));
+    const store = configStore(f.client,page,pin,root);
+    if (later) await store.update({reviewWindowDays:180});
+    const wrong = {...oldPayload,term:"Different term"};
+    if (!later) {
+      // Make the alternate genesis internally consistent, but not the selected V1 snapshot.
+      genesis.active.digest = createHash("sha256").update(JSON.stringify({
+        name:wrong.name,shortName:wrong.shortName,university:wrong.university,term:wrong.term,reviewWindowDays:90,
+      })).digest("hex");
+      f.rows.set(pin,block(pin,genesis,page,true));
+    }
+    f.rows.set(old,block(old,{...header,kind:"candidate",payload:wrong}));
+    expect((await store.get()).reviewWindowDays).toBe(later ? 180 : 90);
+    const run = () => runConfigCommand(f.client,root,{...env,NOTION_CONFIG_MANIFEST_BLOCK_ID:source},
+      command === "--resolve-init" ? [command,pin] : [command],provision);
+    await expect(run()).rejects.toThrow(/digest|provenance/);
+    expect(journal.state()?.pin).toBeUndefined();
+    expect(provision).not.toHaveBeenCalled();
+    f.rows.set(old,f.originalCandidate);
+    f.rows.set(pin,block(pin,{...genesis,active:initial.active},page,true));
+    await expect(run()).resolves.toBe(`NOTION_CONFIG_MANIFEST_BLOCK_ID=${pin}`);
+  });
+
+  it("quarantines before an ambiguous append, survives restart, and resolves only the late manifest", async () => {
+    const f = fixture(), provision = vi.fn();
+    f.rows.delete(pin);
+    const apply = f.blocks.children.append.getMockImplementation()!;
+    let late!: () => ReturnType<typeof apply>;
+    f.blocks.children.append.mockImplementation(async args => {
+      if (!args.children[0].toggle) return apply(args);
+      late = () => apply(args);
+      throw new Error("append timed out");
+    });
+    await expect(runConfigCommand(f.client,root,env,["--init-config"],provision)).rejects.toThrow(/timed out/);
+    await expect((await import("@/lib/notion/config-store")).discoverManifest(f.client,page)).resolves.toBeUndefined();
+    vi.resetModules();
+    const {runConfigCommand: restarted} = await import("../../scripts/config-command");
+    const run = (...flags:string[]) => restarted(f.client,root,env,flags,provision);
+    await expect(run("--init-config")).rejects.toThrow(/indeterminate/);
+    const id = (await late()).results[0].id;
+    await expect(run("--init-config")).rejects.toThrow(/indeterminate/);
+    f.rows.set(pin,block(pin,initial,page,true));
+    await expect(run("--resolve-init",pin)).rejects.toThrow(/quarantined attempt/);
+    f.rows.delete(pin);
+    expect(await run("--resolve-init",id)).toBe(`NOTION_CONFIG_MANIFEST_BLOCK_ID=${id}`);
+    expect(await run("--init-config")).toBe(`NOTION_CONFIG_MANIFEST_BLOCK_ID=${id}`);
+    expect(f.blocks.children.append).toHaveBeenCalledTimes(2);
+    expect(provision).not.toHaveBeenCalled();
     expect(f.blocks.delete).not.toHaveBeenCalled();
   });
 });

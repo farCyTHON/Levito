@@ -1,16 +1,14 @@
 /**
  * Levito Notion provisioning — idempotent.
  *
- * Creates (or reuses) the Levito databases, relation properties and the
- * configuration page beneath NOTION_ROOT, then writes the resulting
- * IDs to .env.local. Safe to re-run: existing resources are matched by title
- * and never duplicated.
+ * Requires an explicitly selected configuration page beneath NOTION_ROOT.
+ * Creates or reuses databases and relations, then writes IDs to .env.local.
  *
  * Run: npm run notion:setup
  */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { Client } from "@notionhq/client";
-import { runConfigCommand } from "./config-command.ts";
+import { listRootDatabases, runConfigCommand } from "./config-command.ts";
 import { ENTITY_SPECS, specFor, type SpecEntity } from "../lib/notion/specs.ts";
 
 for (const file of [".env.local", ".env"]) {
@@ -27,7 +25,7 @@ if (!API_KEY || !ROOT_PAGE_ID) {
 }
 
 const ROOT: string = ROOT_PAGE_ID;
-const client = new Client({ auth: API_KEY, notionVersion: VERSION });
+const client = new Client({ auth: API_KEY, notionVersion: VERSION, retry: false });
 const results: Array<{ entity: SpecEntity | "config"; title: string; dataSourceId?: string; action: string }> = [];
 
 function rt(text: string): Array<{ type: "text"; text: { content: string } }> {
@@ -76,28 +74,6 @@ function scalarProperties(spec: (typeof ENTITY_SPECS)[number]) {
     }
   }
   return props;
-}
-
-async function listRootChildren() {
-  const children: Array<{ id: string; type: string; title: string }> = [];
-  let cursor: string | null = null;
-  do {
-    const res = await client.blocks.children.list({ block_id: ROOT, page_size: 100, start_cursor: cursor });
-    for (const block of res.results) {
-      const b = block as { id: string; type: string; [k: string]: unknown };
-      let title = "";
-      if (b.type === "child_database") {
-        const db = (b.child_database ?? {}) as { title?: string };
-        title = db.title ?? "";
-      } else if (b.type === "child_page") {
-        const pg = (b.child_page ?? {}) as { title?: string };
-        title = pg.title ?? "";
-      }
-      children.push({ id: b.id, type: b.type, title });
-    }
-    cursor = res.has_more ? res.next_cursor : null;
-  } while (cursor);
-  return children;
 }
 
 async function dataSourceIdForDatabase(databaseId: string): Promise<string> {
@@ -161,15 +137,13 @@ async function provision(configPageId: string, pin: string) {
   console.log(`Levito Notion setup (API ${VERSION})`);
   console.log(`Root page: ${ROOT}\n`);
 
-  const children = await listRootChildren();
+  const children = await listRootDatabases(client, ROOT);
   const dbTitles = new Map<string, string>();
   for (const child of children) {
-    if (child.type === "child_database") {
-      try {
-        dbTitles.set(child.title, await dataSourceIdForDatabase(child.id));
-      } catch {
-        console.warn(`  ! could not resolve data source for database "${child.title}"`);
-      }
+    try {
+      dbTitles.set(child.title, await dataSourceIdForDatabase(child.id));
+    } catch {
+      console.warn(`  ! could not resolve data source for database "${child.title}"`);
     }
   }
 

@@ -68,7 +68,7 @@ export async function POST(_request: Request, ctx: { params: Promise<{ id: strin
       reviewWindowDays: data.settings.reviewWindowDays,
     });
     const pack = buildHandoverPack(handover, data, report, resolved.ctx.today);
-    const markdown = packToMarkdown(pack);
+    const markdown = packToMarkdown(pack, "notion");
     const blocks = markdownToBlocks(markdown);
 
     const client = createNotionClient(env);

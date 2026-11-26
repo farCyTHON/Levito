@@ -1,11 +1,12 @@
 "use client";
 
 import { useMemo, useSyncExternalStore } from "react";
+import { isPackSource } from "@/domain/handover-pack";
 import type { ISODate, WorkspaceData } from "@/domain/models";
 import { createApiService } from "@/lib/client/api-service";
 import type { WorkspaceService } from "@/lib/services/workspace-service";
 
-export type WorkspaceMode = "demo" | "notion" | "error" | "loading";
+export type WorkspaceMode = "demo" | "notion" | "unknown" | "error" | "loading";
 
 export interface WorkspaceSnapshot {
   data: WorkspaceData;
@@ -23,25 +24,29 @@ interface WorkspaceState {
 
 const state: WorkspaceState = { snapshot: null, error: null, listeners: new Set(), loaded: false };
 let inflight: Promise<void> | null = null;
+let generation = 0;
 
 function emit() {
   for (const listener of state.listeners) listener();
 }
 
-export async function refreshWorkspace(): Promise<void> {
-  if (inflight) return inflight;
+export async function refreshWorkspace(afterWrite = false): Promise<void> {
+  if (inflight && !afterWrite) return inflight;
+  // A pre-write snapshot must not overwrite a newer post-write read.
+  const request = ++generation;
   inflight = (async () => {
     try {
       const res = await fetch("/api/workspace", { cache: "no-store" });
       const payload = (await res.json().catch(() => null)) as {
         ok?: boolean;
-        mode?: WorkspaceSnapshot["mode"];
+        mode?: unknown;
         today?: ISODate;
         fetchedAt?: string;
         data?: WorkspaceData;
         error?: { message?: string };
         message?: string;
       } | null;
+      if (request !== generation) return;
       if (!res.ok || !payload?.ok || !payload.data) {
         state.error = payload?.error?.message ?? payload?.message ?? `Workspace request failed (${res.status}).`;
         state.snapshot = null;
@@ -50,17 +55,20 @@ export async function refreshWorkspace(): Promise<void> {
         state.snapshot = {
           data: payload.data,
           today: payload.today ?? new Date().toISOString().slice(0, 10),
-          mode: payload.mode ?? "demo",
+          mode: isPackSource(payload.mode) ? payload.mode : "unknown",
           fetchedAt: payload.fetchedAt ?? new Date().toISOString(),
         };
       }
     } catch (error) {
+      if (request !== generation) return;
       state.error = error instanceof Error ? error.message : "Could not reach the Levito API.";
       state.snapshot = null;
     } finally {
-      state.loaded = true;
-      inflight = null;
-      emit();
+      if (request === generation) {
+        state.loaded = true;
+        inflight = null;
+        emit();
+      }
     }
   })();
   return inflight;
@@ -76,7 +84,7 @@ const getSnapshot = () => state.snapshot;
 const getError = () => state.error;
 const getLoaded = () => state.loaded;
 
-const service = createApiService(() => void refreshWorkspace());
+const service = createApiService(() => refreshWorkspace(true));
 
 export interface Workspace {
   data: WorkspaceData;

@@ -41,11 +41,11 @@ function memberName(data: WorkspaceData, id: ID | null): string | null {
 }
 
 /** Incoming owner = successor on a handover scoped to this initiative. */
-function incomingOwnerId(data: WorkspaceData, initiativeId: ID): ID | null {
+function coveringHandover(data: WorkspaceData, initiativeId: ID) {
   const covering = data.handovers.filter((h) => h.initiativeIds.includes(initiativeId));
   if (covering.length === 0) return null;
   covering.sort((a, b) => (b.targetDate ?? "").localeCompare(a.targetDate ?? ""));
-  return covering[0].successorId;
+  return covering[0];
 }
 
 export function evaluateInitiativeReadiness(
@@ -76,9 +76,11 @@ export function evaluateInitiativeReadiness(
 
   /* 2. Incoming owner — 20% */
   {
-    const successorId = incomingOwnerId(data, initiative.id);
-    const successor = memberName(data, successorId);
-    const missing = successor ? [] : ["Name an incoming owner — create or update a handover covering this initiative."];
+    const handover = coveringHandover(data, initiative.id);
+    const successor = memberName(data, handover?.successorId ?? null);
+    const missing = successor ? [] : [handover
+      ? `Choose an incoming owner in the handover "${handover.title}".`
+      : `Create or edit a handover, name an incoming owner and select "${initiative.title}" under Initiatives in scope.`];
     push({
       id: "successor",
       label: "Incoming owner",
@@ -104,7 +106,9 @@ export function evaluateInitiativeReadiness(
     } else if (procedures.length > 0) {
       score = 0.5;
       state = "partial";
-      missing.push(`Linked playbook/SOP content is under ${SUBSTANTIVE_CONTENT_MIN_CHARS} characters — expand it.`);
+      for (const doc of procedures) {
+        missing.push(`"${doc.title}": ${doc.content.trim().length} / ${SUBSTANTIVE_CONTENT_MIN_CHARS} characters. Expand a linked playbook or SOP in the Knowledge Library.`);
+      }
     } else if (docs.length > 0) {
       score = 0.25;
       state = "partial";
@@ -151,12 +155,12 @@ export function evaluateInitiativeReadiness(
       for (const d of stale) {
         missing.push(
           d.lastReviewedOn
-            ? `"${d.title}" last reviewed ${d.lastReviewedOn} — outside the ${options.reviewWindowDays}-day window.`
+            ? `Review "${d.title}" and update its review date (last reviewed ${d.lastReviewedOn}).`
             : `"${d.title}" has never been reviewed — set a review date.`,
         );
       }
-      if (missing.length === 0 && score < 1) {
-        missing.push(`${soon} document(s) are due for review soon.`);
+      for (const d of docs.filter((_, index) => states[index] === "due_soon")) {
+        missing.push(`"${d.title}" is due for review soon. Review it and record the new review date.`);
       }
     }
     push({

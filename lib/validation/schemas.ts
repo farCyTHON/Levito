@@ -59,7 +59,7 @@ export const knowledgeInputSchema = z
     title: title("Title"),
     kind: z.enum(KNOWLEDGE_KINDS),
     summary: text(400),
-    content: text(20000),
+    content: z.string().max(20000, "Keep this under 20000 characters"),
     ownerId: optionalRef,
     tags: z
       .array(z.string().trim().toLowerCase().min(1).max(30))
@@ -132,6 +132,11 @@ export const handoverInputSchema = z
     path: ["acknowledgedOn"],
     message: "A handover cannot be acknowledged without a successor",
   }) satisfies z.ZodType<HandoverInput>;
+
+export const handoverCreateSchema = handoverInputSchema.refine((v) => v.successorId !== null, {
+  path: ["successorId"],
+  message: "Choose an incoming owner before creating this handover",
+});
 
 export const organizationSchema = z.object({
   name: title("Organization name"),

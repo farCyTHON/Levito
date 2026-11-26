@@ -147,11 +147,19 @@ export function buildHandoverPack(
   };
 }
 
-export function packToMarkdown(pack: HandoverPack): string {
+export type PackSource = "notion" | "demo";
+
+export function isPackSource(mode: unknown): mode is PackSource {
+  return mode === "notion" || mode === "demo";
+}
+
+export function packToMarkdown(pack: HandoverPack, source: PackSource): string {
+  if (!isPackSource(source)) throw new Error("Cannot export a handover pack with an unknown record source.");
+  const attribution = source === "notion" ? "live Notion records" : "Levito demo records";
   const lines = [
     `# ${pack.title}`,
     "",
-    `Generated ${formatDate(pack.generatedOn)} from Levito demo records · readiness policy ${pack.policyVersion}`,
+    `Generated ${formatDate(pack.generatedOn)} from ${attribution} · readiness policy ${pack.policyVersion}`,
     "",
     `**Documented readiness:** ${pack.readinessLine}`,
   ];

@@ -29,10 +29,10 @@ async function call<T>(path: string, method: string, body?: unknown): Promise<T>
   return payload as T;
 }
 
-function entityApi<T extends { id: ID }>(path: string, onChanged: () => void) {
+function entityApi<T extends { id: ID }>(path: string, onChanged: () => void | Promise<void>) {
   const mutate = async <R extends { ok: boolean }>(promise: Promise<R>): Promise<R> => {
     const result = await promise;
-    if (result.ok) onChanged();
+    if (result.ok) await onChanged();
     return result;
   };
   return {
@@ -50,7 +50,7 @@ function entityApi<T extends { id: ID }>(path: string, onChanged: () => void) {
  * WorkspaceService-compatible client that talks to the Levito API routes.
  * Used for both demo and Notion modes — the server picks the repository set.
  */
-export function createApiService(onChanged: () => void): WorkspaceService {
+export function createApiService(onChanged: () => void | Promise<void>): WorkspaceService {
   const members = entityApi("/members", onChanged);
   const initiatives = entityApi("/initiatives", onChanged);
   const knowledge = entityApi("/knowledge", onChanged);

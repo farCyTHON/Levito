@@ -142,7 +142,21 @@ describe("buildHandoverPack", () => {
     expect(section("Unfinished actions").items).toHaveLength(3);
     expect(section("Key contacts").items.map((i) => i.title)).toEqual(["Greenleaf Catering"]);
     expect(pack.omissions).toEqual([]);
-    expect(packToMarkdown(pack)).toContain("## Unfinished actions");
+    expect(packToMarkdown(pack, "demo")).toContain("## Unfinished actions");
+  });
+
+  it("changes only the attribution for the same pack and rejects unknown sources", () => {
+    const { data, evaluate } = setup();
+    const pack = buildHandoverPack(handover(data, "h-events"), data, evaluate("h-events"), TODAY);
+    const demo = packToMarkdown(pack, "demo");
+    const notion = packToMarkdown(pack, "notion");
+    expect(demo).toContain("from Levito demo records");
+    expect(notion).toContain("from live Notion records");
+    expect(notion).toBe(demo.replace("from Levito demo records", "from live Notion records"));
+    // @ts-expect-error An untyped caller must not get a default attribution either.
+    expect(() => packToMarkdown(pack)).toThrow(/unknown record source/);
+    // @ts-expect-error Exercise an invalid source received at runtime.
+    expect(() => packToMarkdown(pack, "connected")).toThrow(/unknown record source/);
   });
 
   it("states omissions instead of inventing content", () => {

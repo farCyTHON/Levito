@@ -59,7 +59,7 @@ export function ActionFormDialog({
               />
             )}
           </Field>
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-4 @min-[23rem]:grid-cols-2">
             <Field label="Assignee" error={errors.assigneeId}>
               {(control) => (
                 <MemberSelect
@@ -79,7 +79,7 @@ export function ActionFormDialog({
               <Textarea {...control} rows={2} value={values.nextStep} onChange={(e) => set("nextStep", e.target.value)} />
             )}
           </Field>
-          <div className="grid gap-4 sm:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 @min-[23rem]:grid-cols-2 @min-[28rem]:grid-cols-3">
             <Field label="Status" error={errors.status}>
               {(control) => (
                 <OptionSelect

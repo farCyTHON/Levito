@@ -33,6 +33,7 @@ import {
   type DomainRecord,
   type EntityInput,
 } from "./codec";
+import { configStore } from "./config-store";
 import { discoverDataSource } from "./discovery";
 import type { NotionEnv } from "./env";
 import { NotionError, toNotionError } from "./errors";
@@ -119,94 +120,6 @@ async function queryAll(client: Client, dataSourceId: string): Promise<RawPage[]
     "incomplete_results",
     `Notion query exceeded the ${MAX_PAGES * PAGE_SIZE}-result ceiling for data source ${dataSourceId}. Narrow the data or archive old records.`,
   );
-}
-
-/* ------------------------------------------------------------------ */
-/* Configuration page codec (organization + settings)                  */
-/*                                                                     */
-/* The Levito Configuration page stores org/settings as a JSON code    */
-/* block in its body (plain pages cannot carry custom properties).     */
-/* ------------------------------------------------------------------ */
-
-interface ConfigData {
-  name: string;
-  shortName: string;
-  university: string;
-  term: string;
-  reviewWindowDays: number;
-}
-
-const DEFAULT_CONFIG: ConfigData = {
-  name: "",
-  shortName: "",
-  university: "",
-  term: "",
-  reviewWindowDays: 365,
-};
-
-function blockText(block: unknown): string {
-  const b = block as { type?: string; [k: string]: unknown };
-  const body = b[b.type ?? ""] as { rich_text?: Array<{ plain_text?: string }> } | undefined;
-  return (body?.rich_text ?? []).map((r) => r.plain_text ?? "").join("");
-}
-
-async function readConfig(client: Client, pageId: string): Promise<ConfigData> {
-  let cursor: string | null = null;
-  do {
-    const res = (await client.blocks.children.list({ block_id: pageId, page_size: 100, start_cursor: cursor })) as {
-      results: unknown[];
-      has_more: boolean;
-      next_cursor: string | null;
-    };
-    for (const block of res.results) {
-      const b = block as { type?: string };
-      if (b.type === "code") {
-        try {
-          return { ...DEFAULT_CONFIG, ...(JSON.parse(blockText(block)) as Partial<ConfigData>) };
-        } catch {
-          return { ...DEFAULT_CONFIG };
-        }
-      }
-    }
-    cursor = res.has_more ? res.next_cursor : null;
-  } while (cursor);
-  return { ...DEFAULT_CONFIG };
-}
-
-async function writeConfig(client: Client, pageId: string, data: ConfigData): Promise<void> {
-  // Replace the managed JSON code block: delete existing children, append fresh.
-  let cursor: string | null = null;
-  do {
-    const res = (await client.blocks.children.list({ block_id: pageId, page_size: 100, start_cursor: cursor })) as {
-      results: Array<{ id: string }>;
-      has_more: boolean;
-      next_cursor: string | null;
-    };
-    for (const block of res.results) {
-      await client.blocks.delete({ block_id: block.id }).catch(() => undefined);
-    }
-    cursor = res.has_more ? res.next_cursor : null;
-  } while (cursor);
-  await client.blocks.children.append({
-    block_id: pageId,
-    children: [
-      {
-        object: "block",
-        type: "code",
-        code: {
-          rich_text: [{ type: "text", text: { content: JSON.stringify(data) } }],
-          language: "json",
-        },
-      },
-      {
-        object: "block",
-        type: "paragraph",
-        paragraph: {
-          rich_text: [{ type: "text", text: { content: "Levito configuration — managed by Levito." } }],
-        },
-      },
-    ] as never,
-  });
 }
 
 /* ------------------------------------------------------------------ */
@@ -359,38 +272,31 @@ export async function createNotionRepositories(
 
   /* Organization + settings live on the Levito configuration page. */
 
-  function requireConfigPage(): string {
-    if (!env.configPageId) {
-      throw new NotionError(
-        "unknown",
-        "NOTION_CONFIG_PAGE_ID is not configured. Run npm run notion:setup to create the Levito configuration page.",
-      );
+  function config() {
+    if (!env.rootPageId || !env.configPageId || !env.configManifestBlockId) {
+      throw new NotionError("validation_error", "Set NOTION_ROOT_PAGE_ID, NOTION_CONFIG_PAGE_ID and NOTION_CONFIG_MANIFEST_BLOCK_ID. For legacy installations follow the configuration migration in README.md.");
     }
-    return env.configPageId;
+    return configStore(client, env.configPageId, env.configManifestBlockId, env.rootPageId);
   }
 
   const organization = {
     async get(): Promise<Organization> {
-      const c = await readConfig(client, requireConfigPage());
+      const c = await config().get();
       return { name: c.name, shortName: c.shortName, university: c.university, term: c.term };
     },
     async update(input: Organization): Promise<WriteResult<Organization>> {
-      const pageId = requireConfigPage();
-      const c = await readConfig(client, pageId);
-      await writeConfig(client, pageId, { ...c, ...input });
+      await config().update(input);
       return { record: input, receipt: receipt() };
     },
   };
 
   const settings = {
     async get(): Promise<WorkspaceSettings> {
-      const c = await readConfig(client, requireConfigPage());
-      return { reviewWindowDays: c.reviewWindowDays > 0 ? c.reviewWindowDays : 365 };
+      const c = await config().get();
+      return { reviewWindowDays: c.reviewWindowDays };
     },
     async update(input: WorkspaceSettings): Promise<WriteResult<WorkspaceSettings>> {
-      const pageId = requireConfigPage();
-      const c = await readConfig(client, pageId);
-      await writeConfig(client, pageId, { ...c, reviewWindowDays: input.reviewWindowDays });
+      await config().update({ reviewWindowDays: input.reviewWindowDays });
       return { record: input, receipt: receipt() };
     },
   };
@@ -413,4 +319,3 @@ export async function createNotionRepositories(
     },
   };
 }
-

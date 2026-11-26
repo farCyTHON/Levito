@@ -292,7 +292,7 @@ function HandoverDetail({
               </div>
               <div>
                 <p className="mb-1.5 text-xs text-muted-foreground">
-                  Successor
+                  Incoming owner (successor)
                 </p>
                 <MemberSelect
                   aria-label="Successor"

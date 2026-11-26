@@ -12,7 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { buildHandoverPack, packToMarkdown } from "@/domain/handover-pack";
+import { buildHandoverPack, isPackSource, packToMarkdown } from "@/domain/handover-pack";
 import type { Handover } from "@/domain/models";
 import type { ReadinessReport } from "@/domain/readiness";
 import type { Workspace } from "@/lib/hooks/use-workspace";
@@ -61,8 +61,9 @@ export function PackDialog({
   }
 
   async function copy() {
+    if (!isPackSource(workspace.mode)) return;
     try {
-      await navigator.clipboard.writeText(packToMarkdown(pack));
+      await navigator.clipboard.writeText(packToMarkdown(pack, workspace.mode));
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
@@ -86,7 +87,9 @@ export function PackDialog({
             <span>
               {workspace.mode === "notion"
                 ? "This preview is generated from your live Notion records. Use “Save pack to Notion” to write it as a new page — it has not been saved yet."
-                : "This is a preview built from the demo records. Nothing has been written to Notion. Every line comes from a stored record; nothing is summarised or invented."}
+                : workspace.mode === "demo"
+                  ? "This is a preview built from the demo records. Nothing has been written to Notion. Every line comes from a stored record; nothing is summarised or invented."
+                  : "The source of these records is unknown. Reload the workspace before exporting this pack."}
             </span>
           </p>
 
@@ -139,7 +142,7 @@ export function PackDialog({
               {saving ? "Saving…" : "Save pack to Notion"}
             </Button>
           )}
-          <Button onClick={copy} variant={workspace.mode === "notion" ? "outline" : "default"}>
+          <Button onClick={copy} disabled={!isPackSource(workspace.mode)} variant={workspace.mode === "notion" ? "outline" : "default"}>
             {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
             {copied ? "Copied" : "Copy as Markdown"}
           </Button>

@@ -4,6 +4,7 @@ import type { EntityRepository, WorkspaceRepositories, WriteReceipt } from "@/li
 import {
   actionInputSchema,
   decisionInputSchema,
+  handoverCreateSchema,
   handoverInputSchema,
   initiativeInputSchema,
   knowledgeInputSchema,
@@ -29,10 +30,11 @@ function entityCommands<T extends { id: ID }, TInput>(
   repo: EntityRepository<T, TInput>,
   schema: z.ZodType<TInput>,
   label: string,
+  createSchema: z.ZodType<TInput> = schema,
 ) {
   return {
     async create(input: unknown): Promise<CommandResult<T>> {
-      const parsed = schema.safeParse(input);
+      const parsed = createSchema.safeParse(input);
       if (!parsed.success) return invalid(toFieldErrors(parsed.error));
       return { ok: true, ...(await repo.create(parsed.data)) };
     },
@@ -51,7 +53,7 @@ function entityCommands<T extends { id: ID }, TInput>(
 
 export function createWorkspaceService(repos: WorkspaceRepositories) {
   const knowledge = entityCommands(repos.knowledge, knowledgeInputSchema, "document");
-  const handovers = entityCommands(repos.handovers, handoverInputSchema, "handover");
+  const handovers = entityCommands(repos.handovers, handoverInputSchema, "handover", handoverCreateSchema);
 
   return {
     target: repos.target,

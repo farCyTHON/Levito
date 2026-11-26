@@ -6,6 +6,7 @@ export interface NotionEnv {
   version: string;
   rootPageId: string | null;
   configPageId: string | null;
+  configManifestBlockId: string | null;
   dataSources: Partial<Record<SpecEntity, string>>;
 }
 
@@ -22,6 +23,7 @@ export function readNotionEnv(env: Record<string, string | undefined> = process.
     version: env.NOTION_VERSION?.trim() || DEFAULT_NOTION_VERSION,
     rootPageId: env.NOTION_ROOT_PAGE_ID?.trim()?.replace(/-/g, "") || null,
     configPageId: env.NOTION_CONFIG_PAGE_ID?.trim()?.replace(/-/g, "") || null,
+    configManifestBlockId: env.NOTION_CONFIG_MANIFEST_BLOCK_ID?.trim() || null,
     dataSources,
   };
 }
@@ -43,6 +45,9 @@ export function missingNotionConfig(env: NotionEnv): NotionConfigIssue[] {
   }
   if (!env.configPageId) {
     issues.push({ key: "NOTION_CONFIG_PAGE_ID", description: "Levito configuration page ID (created by notion:setup)" });
+  }
+  if (!env.configManifestBlockId) {
+    issues.push({ key: "NOTION_CONFIG_MANIFEST_BLOCK_ID", description: "Pinned Levito configuration manifest (see README migration instructions)" });
   }
   return issues;
 }
